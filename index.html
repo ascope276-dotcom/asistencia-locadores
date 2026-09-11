@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+  <title>Marcar Asistencia</title>
+  <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
+  <style>
+    :root { --color-primario: #B51B1B; --color-texto: #333333; --color-fondo: #F5F7FA; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; font-family: 'Segoe UI', Roboto, Arial, sans-serif;
+      background: var(--color-fondo); color: var(--color-texto);
+      min-height: 100vh; display: flex; flex-direction: column; align-items: center;
+      padding: 24px 16px; text-align: center;
+    }
+    img.logo { width: 80px; height: 80px; object-fit: contain; margin-bottom: 10px; }
+    h1 { font-size: 20px; margin: 4px 0 20px; color: var(--color-primario); }
+    #video { width: 100%; max-width: 380px; border-radius: 14px; background: #000; display: none; }
+    #canvasOculto { display: none; }
+    .boton {
+      background: var(--color-primario); color: #fff; border: none; padding: 16px 26px;
+      border-radius: 14px; font-size: 16px; font-weight: 700; cursor: pointer; margin-top: 20px;
+      width: 100%; max-width: 380px;
+    }
+    .boton:disabled { opacity: .5; }
+    #estado {
+      margin-top: 22px; padding: 16px; border-radius: 12px; font-size: 15px; max-width: 380px;
+      display: none; font-weight: 600;
+    }
+    #estado.ok { background: #D4EDDA; color: #2E7D32; display: block; }
+    #estado.error { background: #F8D7DA; color: #C62828; display: block; }
+    #estado.espera { background: #FFF3CD; color: #856404; display: block; }
+    p.ayuda { font-size: 12.5px; color: #888; max-width: 380px; margin-top: 26px; }
+  </style>
+</head>
+<body>
+  <img class="logo" id="logoEmpresa" src="" alt="Logo" style="display:none;">
+  <h1 id="nombreEmpresa">Marcar Asistencia</h1>
+
+  <video id="video" playsinline muted></video>
+  <canvas id="canvasOculto"></canvas>
+
+  <button class="boton" id="btnEscanear" onclick="iniciarEscaneo()">📷 Escanear mi carnet</button>
+  <div id="estado"></div>
+
+  <p class="ayuda">Solo podrás marcar tu asistencia si te encuentras dentro del local. Se te pedirá permiso de cámara y de ubicación — acéptalos para poder continuar.</p>
+
+  <script>
+    /* ==========================================================
+       ⚠️ ÚNICO DATO QUE DEBES CAMBIAR: pega aquí el link de tu
+       app de Apps Script (Implementar → Gestionar implementaciones
+       → copia el link que termina en /exec), SIN nada después.
+       ========================================================== */
+var URL_APP_SCRIPT = 'https://script.google.com/macros/s/AKfycbwupeXajtp2C4aQ5YULW6yiW9nndsE-yoHA2n_jtwOFJaH8MeQiaVEdeHIpHqjsoj0v/exec';
+
+    var video = document.getElementById('video');
+    var canvas = document.getElementById('canvasOculto');
+    var ctx = canvas.getContext('2d');
+    var streamActual = null;
+    var escaneando = false;
+
+    // Carga colores/logo en vivo desde tu Configuración (para que combine con tu marca)
+    fetch(URL_APP_SCRIPT + '?accion=configPublica')
+      .then(function (r) { return r.json(); })
+      .then(function (config) {
+        if (config.colorPrimario) document.documentElement.style.setProperty('--color-primario', config.colorPrimario);
+        if (config.logoUrl) {
+          var img = document.getElementById('logoEmpresa');
+          img.src = config.logoUrl;
+          img.style.display = 'block';
+        }
+        if (config.nombreEmpresa) document.getElementById('nombreEmpresa').textContent = config.nombreEmpresa;
+      })
+      .catch(function () { /* si falla, se queda con el diseño por defecto */ });
+
+    function mostrarEstado(texto, tipo) {
+      var el = document.getElementById('estado');
+      el.textContent = texto;
+      el.className = tipo;
+    }
+
+    function detenerCamara() {
+      escaneando = false;
+      video.style.display = 'none';
+      if (streamActual) {
+        streamActual.getTracks().forEach(function (t) { t.stop(); });
+        streamActual = null;
+      }
+    }
+
+    function iniciarEscaneo() {
+      mostrarEstado('Abriendo cámara...', 'espera');
+      document.getElementById('btnEscanear').disabled = true;
+
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        mostrarEstado('Este navegador no permite acceso a la cámara. Prueba con Chrome o Safari actualizado.', 'error');
+        document.getElementById('btnEscanear').disabled = false;
+        return;
+      }
+
+      navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' } } })
+        .then(activarCamara)
+        .catch(function () {
+          navigator.mediaDevices.getUserMedia({ video: true })
+            .then(activarCamara)
+            .catch(function (errorRespaldo) {
+              mostrarEstado('No se pudo acceder a la cámara. Detalle: ' + (errorRespaldo.name || 'desconocido'), 'error');
+              document.getElementById('btnEscanear').disabled = false;
+            });
+        });
+    }
+
+    function activarCamara(stream) {
+      streamActual = stream;
+      video.srcObject = stream;
+      video.style.display = 'block';
+      video.play();
+      escaneando = true;
+      mostrarEstado('Apunta la cámara a tu carnet QR...', 'espera');
+      requestAnimationFrame(tick);
+    }
+
+    function tick() {
+      if (!escaneando) return;
+      if (video.readyState === video.HAVE_ENOUGH_DATA) {
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        var imagen = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        var codigo = jsQR(imagen.data, imagen.width, imagen.height);
+        if (codigo && codigo.data) {
+          detenerCamara();
+          procesarCodigoQR(codigo.data);
+          return;
+        }
+      }
+      requestAnimationFrame(tick);
+    }
+
+    function procesarCodigoQR(texto) {
+      mostrarEstado('Verificando tu ubicación...', 'espera');
+      if (!navigator.geolocation) {
+        mostrarEstado('Tu navegador no soporta ubicación (GPS). No se puede marcar asistencia.', 'error');
+        document.getElementById('btnEscanear').disabled = false;
+        return;
+      }
+      navigator.geolocation.getCurrentPosition(function (posicion) {
+        var lat = posicion.coords.latitude;
+        var lng = posicion.coords.longitude;
+        mostrarEstado('Registrando asistencia...', 'espera');
+
+        var url = URL_APP_SCRIPT + '?accion=marcarAsistenciaApi' +
+          '&qr=' + encodeURIComponent(texto) + '&lat=' + lat + '&lng=' + lng;
+
+        fetch(url)
+          .then(function (r) { return r.json(); })
+          .then(function (r) {
+            document.getElementById('btnEscanear').disabled = false;
+            if (r.ok) mostrarEstado(r.datos.mensaje, 'ok');
+            else mostrarEstado(r.error, 'error');
+          })
+          .catch(function (err) {
+            document.getElementById('btnEscanear').disabled = false;
+            mostrarEstado('No se pudo conectar con el sistema: ' + err.message, 'error');
+          });
+      }, function () {
+        mostrarEstado('No pudimos obtener tu ubicación. Activa el GPS y dale permiso al navegador.', 'error');
+        document.getElementById('btnEscanear').disabled = false;
+      }, { enableHighAccuracy: true, timeout: 12000 });
+    }
+  </script>
+</body>
+</html>
