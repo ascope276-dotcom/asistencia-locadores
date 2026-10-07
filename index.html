@@ -26,7 +26,7 @@
     .boton:disabled { opacity: .5; }
     #estado {
       margin-top: 22px; padding: 16px; border-radius: 12px; font-size: 15px; max-width: 380px;
-      display: none; font-weight: 600;
+      display: none; font-weight: 600; word-break: break-word;
     }
     #estado.ok { background: #D4EDDA; color: #2E7D32; display: block; }
     #estado.error { background: #F8D7DA; color: #C62828; display: block; }
@@ -60,9 +60,29 @@ var URL_APP_SCRIPT = 'https://script.google.com/macros/s/AKfycbya1YYaA6Ge_z6xfB9
     var streamActual = null;
     var escaneando = false;
 
+    /**
+     * Pide algo al sistema y devuelve SIEMPRE un resultado entendible.
+     * Si el servidor contesta con una página web en vez de datos, en lugar
+     * del críptico "Unexpected token <" mostramos qué página llegó
+     * (su título y el inicio del texto) para saber exactamente qué pasó.
+     */
+    function pedirAlSistema(url) {
+      return fetch(url).then(function (resp) {
+        return resp.text().then(function (texto) {
+          try {
+            return JSON.parse(texto);
+          } catch (e) {
+            var titulo = (texto.match(/<title>([^<]*)<\/title>/i) || [])[1] || '';
+            var inicio = texto.replace(/\s+/g, ' ').slice(0, 140);
+            throw new Error('El sistema respondió con una página en vez de datos (HTTP ' + resp.status + '). ' +
+              (titulo ? 'Título de la página: "' + titulo + '". ' : '') + 'Inicio: ' + inicio);
+          }
+        });
+      });
+    }
+
     // Carga colores/logo en vivo desde tu Configuración (para que combine con tu marca)
-    fetch(URL_APP_SCRIPT + '?accion=configPublica')
-      .then(function (r) { return r.json(); })
+    pedirAlSistema(URL_APP_SCRIPT + '?accion=configPublica')
       .then(function (config) {
         if (config.colorPrimario) document.documentElement.style.setProperty('--color-primario', config.colorPrimario);
         if (config.logoUrl) {
@@ -153,8 +173,7 @@ var URL_APP_SCRIPT = 'https://script.google.com/macros/s/AKfycbya1YYaA6Ge_z6xfB9
         var url = URL_APP_SCRIPT + '?accion=marcarAsistenciaApi' +
           '&qr=' + encodeURIComponent(texto) + '&lat=' + lat + '&lng=' + lng;
 
-        fetch(url)
-          .then(function (r) { return r.json(); })
+        pedirAlSistema(url)
           .then(function (r) {
             document.getElementById('btnEscanear').disabled = false;
             if (r.ok) mostrarEstado(r.datos.mensaje, 'ok');
